@@ -7,11 +7,21 @@ description: Turn a long talking-head "yap" recording into a tight, vertical, Ti
 
 ## Overview
 
-Converts a long single-take talking-head recording into a postable vertical cut using
+Converts a long single-take talking-head recording into postable vertical cuts using
 the `davinci-resolve` MCP server. The transcript decides what to keep; the audio
 waveform decides where the cuts land. Produces a Resolve project with a raw reference
-timeline, one or more cut timelines, neutral colour correction, and delivery exports
-at requested file sizes.
+timeline, cut timelines, neutral colour correction, and delivery exports at requested
+file sizes.
+
+**Default deliverable is BOTH cuts**, exported as two files:
+
+1. **Short** (`mode: spine`, `--split-gap 0.55`): a 60-90 second restructured
+   scroll-stopper. This is the post.
+2. **Full** (`mode: full`, `--split-gap 1.0-1.2`): the whole story with silences,
+   repeats, and dead tangents removed but the source order kept.
+
+Build one instead of both only when the user explicitly asks for a single version
+(e.g. "just the short one", "only clean it up, don't restructure").
 
 Scope is **neutral colour correction** - white balance, a touch of contrast, and
 enough saturation to replace what neutralising removes. Stylised or "dramatic" looks
@@ -30,8 +40,9 @@ Confirm before starting:
 
 ## Workflow
 
-Work in a scratch directory. Ask the target only if it is unclear: aspect/resolution
-(default 1080x1920 at 24fps for TikTok), rough target length, and delivery size.
+Work in a scratch directory. Defaults: 1080x1920 at 24fps for TikTok, and **both cut
+versions** (short + full, per Overview). Ask only if aspect/resolution or delivery
+size is unclear; do not ask which version to build - both is the default.
 
 ### 1. Probe the source
 
@@ -71,15 +82,16 @@ Print every segment with its index and timings, then read all of it:
 python3 -c "import json,sys;[print(f'[{i:3d}] {s[\"start\"]:7.2f}-{s[\"end\"]:7.2f}  {s[\"text\"].strip()}') for i,s in enumerate(json.load(open(sys.argv[1]))['segments'])]" <work-dir>/tx/yap.json
 ```
 
-Apply `references/editorial-rules.md` to pick removals. Write a plan file:
+Apply `references/editorial-rules.md` to pick removals. Write one plan file per
+deliverable (both, by default):
 
 ```json
+// plan_full.json - full story, source order, dead air and tangents dropped
 {"mode": "full", "drop": [13, 15, 32, 46, 47]}
 ```
 
-or, for a short structured version:
-
 ```json
+// plan_short.json - 60-90s restructured spine
 {"mode": "spine", "spine": [[0,null], [1,null], [19,[0,5]], [21,[0,11]]]}
 ```
 
@@ -93,14 +105,15 @@ scripts/build_cut.py --transcript <work>/tx/yap.json --audio <work>/yap.wav \
   --plan plan.json --clip-id <resolve-clip-id> --fps 24 --out clip_infos.json
 ```
 
-Match `--split-gap` to the job: leave it at **0.55** for a tight 60-90s cut, raise to
-**1.0-1.2** for a long watchable version so the delivery still breathes. Heed the
-report - any clip under 0.5s means the threshold is too tight; rebuild at the value
+Run once per plan file. Match `--split-gap` to the cut: **0.55** for the tight 60-90s
+short, **1.0-1.2** for the full watchable version so the delivery still breathes. Heed
+the report - any clip under 0.5s means the threshold is too tight; rebuild at the value
 the warning names rather than shipping a machine-gunned edit.
 
 ### 6. Create the cut timeline and verify
 
-Pass `clip_infos.json` to `media_pool.create_timeline_from_clips`, then **always**:
+For each cut, pass its `clip_infos.json` to `media_pool.create_timeline_from_clips`
+(e.g. timelines `_mcp_short` and `_mcp_full`), then **always**, per timeline:
 
 - `timeline.detect_gaps_overlaps` must return `gap_count: 0, overlap_count: 0`
 - `timeline.get_current`: `end_frame - start_frame` must equal the expected frames
@@ -115,8 +128,8 @@ scripts/color_correct.py measure --source <source> --out cdl.json
 ```
 
 Apply the CDL to clip 0 with `timeline_item_color.safe_set_cdl`, then to every other
-clip (per-index calls, or `safe_copy_grade` with target ids). Render, then verify
-measurably rather than by eye:
+clip (per-index calls, or `safe_copy_grade` with target ids) - on **both** cut
+timelines. Render, then verify measurably rather than by eye:
 
 ```bash
 scripts/color_correct.py verify --before ungraded.mp4 --after graded.mp4 --sheet compare.png
@@ -127,7 +140,8 @@ Expect neutral R/G to move toward 1.00 while stopping short of it, luma to hold 
 
 ### 8. Export
 
-Render from Resolve per section 5 of the recipes reference, then:
+Render both timelines from Resolve per section 5 of the recipes reference (name the
+files `<source>_short.mp4` and `<source>_full.mp4`), then per file:
 
 ```bash
 scripts/finalize_export.sh <resolve-render.mp4> <delivery.mp4> 96
@@ -139,7 +153,7 @@ default, which `finalize_export.sh` fixes while copying the video stream untouch
 
 ## Reporting back
 
-State the before/after duration, the clip count, that gaps verified at zero, and
+For **each** delivered file, state the before/after duration, the clip count, that gaps verified at zero, and
 **each judgement call made** - lines kept that arguably were mistakes, repetition left
 in as deliberate emphasis, and anything dropped purely to hit a length target. Note
 that only playback can settle whether a specific cut sounds clipped.
